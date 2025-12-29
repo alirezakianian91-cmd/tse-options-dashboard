@@ -1,0 +1,292 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TSE Options Dashboard</title>
+    <!-- Bootstrap from jsDelivr (usually works) -->
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        body { padding: 20px; background-color: #f8f9fa; }
+        .card { margin-bottom: 20px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }
+        .table-container { max-height: 600px; overflow-y: auto; }
+        .last-update { color: #6c757d; font-size: 0.9em; }
+        .filters { background: #e9ecef; padding: 15px; border-radius: 5px; margin-bottom: 20px; }
+        .btn-group-sm { margin-right: 10px; margin-bottom: 5px; }
+        .filter-input { width: 100px !important; display: inline-block !important; }
+    </style>
+</head>
+<body>
+    <div class="container-fluid">
+        <h1 class="mb-4">📊 TSE Options Dashboard</h1>
+        
+        <!-- Stats and Controls -->
+        <div class="row mb-4">
+            <div class="col-md-6">
+                <div class="card">
+                    <div class="card-body">
+                        <h5 class="card-title">Dashboard Info</h5>
+                        <p id="stats" class="card-text">Loading...</p>
+                        <p id="lastUpdate" class="last-update">Last update: --</p>
+                        <button id="refreshBtn" class="btn btn-primary btn-sm">🔄 Refresh Now</button>
+                        <button id="autoRefreshBtn" class="btn btn-success btn-sm">Auto-refresh: <span id="autoRefreshStatus">ON</span></button>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="col-md-6">
+                <div class="card">
+                    <div class="card-body">
+                        <h5 class="card-title">Quick Filters</h5>
+                        <div class="filters">
+                            <div class="mb-2">
+                                <label>Filter OTM%:</label>
+                                <input type="number" id="otmMin" placeholder="Min" value="-10" class="form-control form-control-sm filter-input">
+                                to
+                                <input type="number" id="otmMax" placeholder="Max" value="10" class="form-control form-control-sm filter-input">
+                                <button onclick="filterByOTM()" class="btn btn-warning btn-sm">Apply</button>
+                                <button onclick="clearFilters()" class="btn btn-secondary btn-sm">Clear</button>
+                            </div>
+                            
+                            <div class="mb-2">
+                                <label>Filter Daily Return%:</label>
+                                <input type="number" id="returnMin" placeholder="Min" value="0" class="form-control form-control-sm filter-input">
+                                to
+                                <input type="number" id="returnMax" placeholder="Max" value="1" class="form-control form-control-sm filter-input">
+                                <button onclick="filterByReturn()" class="btn btn-warning btn-sm">Apply</button>
+                            </div>
+                            
+                            <div class="mb-2">
+                                <label>Filter DTE:</label>
+                                <input type="number" id="dteMin" placeholder="Min" value="1" class="form-control form-control-sm filter-input">
+                                to
+                                <input type="number" id="dteMax" placeholder="Max" value="60" class="form-control form-control-sm filter-input">
+                                <button onclick="filterByDTE()" class="btn btn-warning btn-sm">Apply</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Data Table -->
+        <div class="card">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <h5 class="mb-0">Options Data</h5>
+                <div>
+                    <div class="btn-group btn-group-sm" role="group">
+                        <button onclick="sortTable('Daily_Return_%', 'desc')" class="btn btn-outline-primary">Sort by Return ↓</button>
+                        <button onclick="sortTable('OTM%', 'asc')" class="btn btn-outline-primary">Sort by OTM% ↑</button>
+                        <button onclick="sortTable('Margin', 'asc')" class="btn btn-outline-primary">Sort by Margin ↑</button>
+                        <button onclick="sortTable('DTE', 'asc')" class="btn btn-outline-primary">Sort by DTE ↑</button>
+                    </div>
+                </div>
+            </div>
+            <div class="card-body">
+                <div class="table-container">
+                    <table class="table table-striped table-bordered">
+                        <thead>
+                            <tr>
+                                <th>Symbol</th>
+                                <th>Type</th>
+                                <th>Strike</th>
+                                <th>Stock Price</th>
+                                <th>Option Price</th>
+                                <th>OTM%</th>
+                                <th>DTE</th>
+                                <th>Margin</th>
+                                <th>Daily Return%</th>
+                                <th>Expiration</th>
+                            </tr>
+                        </thead>
+                        <tbody id="tableBody">
+                            <!-- Data will be inserted here by JavaScript -->
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- jQuery from Google CDN (most reliable) -->
+    <script src="https://ajax.googleapis.com/ajax/libs/jquery/3.6.0/jquery.min.js"></script>
+    
+    <script>
+        // Global variables
+        let autoRefresh = true;
+        let autoRefreshInterval = 60000; // 60 seconds
+        let refreshTimer;
+        let allData = []; // Store all data for filtering
+        
+        // Load data on page load
+        $(document).ready(function() {
+            loadData();
+            startAutoRefresh();
+        });
+        
+        function loadData() {
+            $.get('/data', function(response) {
+                if (response.error) {
+                    $('#stats').html('<span class="text-danger">' + response.error + '</span>');
+                    return;
+                }
+                
+                // Store all data for filtering
+                allData = response.data;
+                
+                // Update stats
+                $('#stats').html(`Total options: ${response.total_rows}`);
+                $('#lastUpdate').text(`Last update: ${response.last_update}`);
+                
+                // Display all data initially
+                displayData(allData);
+            });
+        }
+        
+        function displayData(data) {
+            // Clear table
+            $('#tableBody').empty();
+            
+            // Populate table
+            data.forEach(function(row) {
+                let tr = $('<tr>');
+                tr.append(`<td>${row.Short_Symbol || ''}</td>`);
+                tr.append(`<td><span class="badge ${row.Type === 'Call' ? 'bg-success' : 'bg-danger'}">${row.Type || ''}</span></td>`);
+                tr.append(`<td>${formatNumber(row.Strike_Price)}</td>`);
+                tr.append(`<td>${formatNumber(row.Stock_Close_Price)}</td>`);
+                tr.append(`<td>${formatNumber(row.Last_Price)}</td>`);
+                tr.append(`<td class="${getOTMClass(row.OTM)}">${row.OTM || '0.00'}%</td>`);
+                tr.append(`<td>${row.DTE || ''}</td>`);
+                tr.append(`<td>${formatNumber(row.Margin)}</td>`);
+                tr.append(`<td class="${getReturnClass(row.Daily_Return_)}">${row.Daily_Return_ || '0.00'}%</td>`);
+                tr.append(`<td>${row.Expiration_date || ''}</td>`);
+                $('#tableBody').append(tr);
+            });
+        }
+        
+        function formatNumber(num) {
+            if (num === null || num === undefined) return '';
+            return new Intl.NumberFormat().format(Math.round(num));
+        }
+        
+        function getOTMClass(otm) {
+            if (otm === null || otm === undefined) return '';
+            if (otm > 10) return 'table-warning';
+            if (otm > 0) return 'table-info';
+            if (otm < -10) return 'table-danger';
+            if (otm < 0) return 'table-success';
+            return '';
+        }
+        
+        function getReturnClass(returnPct) {
+            if (returnPct === null || returnPct === undefined) return '';
+            if (returnPct > 0.5) return 'table-success';
+            if (returnPct > 0.2) return 'table-info';
+            return '';
+        }
+        
+        // Filter functions (client-side filtering)
+        function filterByOTM() {
+            let min = parseFloat($('#otmMin').val()) || -100;
+            let max = parseFloat($('#otmMax').val()) || 100;
+            
+            let filtered = allData.filter(function(row) {
+                let otm = row.OTM;
+                if (otm === null || otm === undefined) return false;
+                return otm >= min && otm <= max;
+            });
+            
+            displayData(filtered);
+            $('#stats').html(`Filtered options: ${filtered.length} of ${allData.length} (OTM%: ${min} to ${max})`);
+        }
+        
+        function filterByReturn() {
+            let min = parseFloat($('#returnMin').val()) || 0;
+            let max = parseFloat($('#returnMax').val()) || 100;
+            
+            let filtered = allData.filter(function(row) {
+                let ret = row.Daily_Return_;
+                if (ret === null || ret === undefined) return false;
+                return ret >= min && ret <= max;
+            });
+            
+            displayData(filtered);
+            $('#stats').html(`Filtered options: ${filtered.length} of ${allData.length} (Return%: ${min} to ${max})`);
+        }
+        
+        function filterByDTE() {
+            let min = parseInt($('#dteMin').val()) || 0;
+            let max = parseInt($('#dteMax').val()) || 365;
+            
+            let filtered = allData.filter(function(row) {
+                let dte = row.DTE;
+                if (dte === 'NA' || dte === null || dte === undefined) return false;
+                return dte >= min && dte <= max;
+            });
+            
+            displayData(filtered);
+            $('#stats').html(`Filtered options: ${filtered.length} of ${allData.length} (DTE: ${min} to ${max})`);
+        }
+        
+        function clearFilters() {
+            displayData(allData);
+            $('#stats').html(`Total options: ${allData.length}`);
+            $('#otmMin').val(-10);
+            $('#otmMax').val(10);
+            $('#returnMin').val(0);
+            $('#returnMax').val(1);
+            $('#dteMin').val(1);
+            $('#dteMax').val(60);
+        }
+        
+        // Sort functions (client-side sorting)
+        function sortTable(column, order) {
+            let sorted = [...allData].sort(function(a, b) {
+                let valA = a[column];
+                let valB = b[column];
+                
+                // Handle null/undefined
+                if (valA === null || valA === undefined) valA = order === 'asc' ? Infinity : -Infinity;
+                if (valB === null || valB === undefined) valB = order === 'asc' ? Infinity : -Infinity;
+                
+                if (order === 'asc') {
+                    return valA - valB;
+                } else {
+                    return valB - valA;
+                }
+            });
+            
+            displayData(sorted);
+            $('#stats').html(`Sorted by ${column} (${order === 'asc' ? 'low to high' : 'high to low'})`);
+        }
+        
+        // Auto-refresh functions
+        function startAutoRefresh() {
+            if (autoRefresh) {
+                refreshTimer = setInterval(loadData, autoRefreshInterval);
+            }
+        }
+        
+        function stopAutoRefresh() {
+            clearInterval(refreshTimer);
+        }
+        
+        $('#refreshBtn').click(function() {
+            loadData();
+        });
+        
+        $('#autoRefreshBtn').click(function() {
+            autoRefresh = !autoRefresh;
+            if (autoRefresh) {
+                startAutoRefresh();
+                $('#autoRefreshStatus').text('ON');
+                $(this).removeClass('btn-danger').addClass('btn-success');
+            } else {
+                stopAutoRefresh();
+                $('#autoRefreshStatus').text('OFF');
+                $(this).removeClass('btn-success').addClass('btn-danger');
+            }
+        });
+    </script>
+</body>
+</html>
